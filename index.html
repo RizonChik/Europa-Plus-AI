@@ -146,6 +146,10 @@
       font-weight: 800; font-size: 16px; color: #fff;
       background: hsl(var(--h) 80% 50%);
     }
+    .avatar img, .cover-img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; background: #fff; }
+    .cover-img { position: absolute; width: 146px; height: 146px; object-fit: contain; padding: 22px; background: #fff; }
+    .station.failed { opacity: .45; }
+    .station.failed .sub::after { content: " · недоступна"; }
     .meta { min-width: 0; flex: 1; }
     .name { display: block; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .sub { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -163,7 +167,7 @@
 
   <main class="app">
     <section class="player" id="player">
-      <div class="cover" id="cover"><span id="coverText">E+</span></div>
+      <div class="cover" id="cover"><span id="coverText">E+</span><img id="coverImg" class="cover-img" alt="" hidden /></div>
       <div class="badge">Онлайн-радио</div>
       <h1 id="stationName">Европа Плюс</h1>
       <p class="info-line" id="stationInfo">Прямой эфир</p>
@@ -230,6 +234,8 @@
     let current = EUROPA;      // текущая станция
     let streamIndex = 0;
     let isPlaying = false;
+    let stallTimer = null;     // таймер «поток завис»
+    const failed = new Set();  // id станций, которые не запустились
 
     // ---------- Утилиты ----------
     function hueOf(text) {
@@ -253,6 +259,30 @@
       else if (!$("status").textContent.startsWith("Нажми") && !$("status").textContent.startsWith("Поток")) setStatus("Пауза");
     }
 
+    // Логотип станции: картинка из каталога, при ошибке остаются инициалы
+    function appendLogo(el, s) {
+      el.textContent = s.abbr || initials(s.name);
+      if (!s.favicon) return;
+      const img = new Image();
+      img.alt = "";
+      img.loading = "lazy";
+      img.referrerPolicy = "no-referrer";
+      img.onload = () => { el.textContent = ""; el.append(img); };
+      img.src = s.favicon;
+    }
+
+    function setCoverLogo(s) {
+      const img = $("coverImg");
+      img.hidden = true;
+      img.onload = null;
+      img.onerror = null;
+      img.removeAttribute("src");
+      if (!s.favicon) return;
+      img.onload = () => { img.hidden = false; };
+      img.onerror = () => { img.hidden = true; };
+      img.src = s.favicon;
+    }
+
     function applyTheme(station) {
       document.documentElement.style.setProperty("--hue", station.hue);
     }
@@ -261,6 +291,7 @@
       $("stationName").textContent = current.name;
       $("stationInfo").textContent = current.info || "Онлайн-радио";
       $("coverText").textContent = current.abbr || initials(current.name);
+      setCoverLogo(current);
       applyTheme(current);
       document.title = `${current.name} — онлайн-радио`;
       renderList();
@@ -275,7 +306,30 @@
     }
 
     // ---------- Воспроизведение ----------
+    // Если поток не запустился за 15 секунд, считаем его неработающим
+    function startStallTimer() {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(streamFailed, 15000);
+    }
+
+    function streamFailed() {
+      clearTimeout(stallTimer);
+      if (streamIndex < current.streams.length - 1) {
+        streamIndex++;
+        setStream();
+        setStatus("Переключаю поток…");
+        play();
+      } else {
+        failed.add(current.id);
+        radio.pause();
+        setPlayingUI(false);
+        setStatus("Станция недоступна");
+        renderList();
+      }
+    }
+
     async function play() {
+      startStallTimer();
       try {
         await radio.play();
         setPlayingUI(true);
@@ -287,6 +341,7 @@
     }
 
     function pause() {
+      clearTimeout(stallTimer);
       radio.pause();
       setPlayingUI(false);
     }
@@ -314,9 +369,13 @@
 
     function step(delta) {
       const all = allStations();
-      const i = stationIndex();
-      const next = all[(i + delta + all.length) % all.length];
-      selectStation(next, true);
+      let i = stationIndex();
+      // пропускаем станции, которые уже не работали
+      for (let k = 0; k < all.length; k++) {
+        i = (i + delta + all.length) % all.length;
+        if (!failed.has(all[i].id)) break;
+      }
+      selectStation(all[i], true);
     }
 
     // ---------- Управление ----------
@@ -334,20 +393,16 @@
 
     radio.volume = 0.7;
 
-    radio.addEventListener("playing", () => setPlayingUI(true));
+    radio.addEventListener("playing", () => {
+      clearTimeout(stallTimer);
+      failed.delete(current.id);
+      setPlayingUI(true);
+    });
     radio.addEventListener("pause", () => { if (!radio.ended) setPlayingUI(false); });
     radio.addEventListener("waiting", () => setStatus("Буферизация…"));
     radio.addEventListener("error", () => {
       if (!radio.getAttribute("src")) return;
-      if (streamIndex < current.streams.length - 1) {
-        streamIndex++;
-        setStream();
-        setStatus("Переключаю поток…");
-        play();
-      } else {
-        setPlayingUI(false);
-        setStatus("Поток недоступен");
-      }
+      streamFailed();
     });
 
     if ("mediaSession" in navigator) {
@@ -367,12 +422,12 @@
         const li = document.createElement("li");
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.className = "station" + (s.id === current.id ? " active" : "");
+        btn.className = "station" + (s.id === current.id ? " active" : "") + (failed.has(s.id) ? " failed" : "");
 
         const avatar = document.createElement("span");
         avatar.className = "avatar";
         avatar.style.setProperty("--h", s.hue);
-        avatar.textContent = s.abbr || initials(s.name);
+        appendLogo(avatar, s);
 
         const meta = document.createElement("span");
         meta.className = "meta";
@@ -428,6 +483,7 @@
                 info: parts.join(" · ") || "Онлайн-радио",
                 abbr: initials(name),
                 hue,
+                favicon: s.favicon && s.favicon.startsWith("https://") ? s.favicon : "",
                 streams: [s.url_resolved]
               };
             });
