@@ -334,7 +334,11 @@
     // Если поток не запустился за 15 секунд, считаем его неработающим
     function startStallTimer() {
       clearTimeout(stallTimer);
-      stallTimer = setTimeout(streamFailed, 15000);
+      stallTimer = setTimeout(() => {
+        // Если звук уже идёт, поток не завис — ничего не переключаем
+        if (!radio.paused && radio.currentTime > 0) return;
+        streamFailed();
+      }, 15000);
     }
 
     function streamFailed() {
@@ -425,6 +429,13 @@
     });
     radio.addEventListener("pause", () => { if (!radio.ended) setPlayingUI(false); });
     radio.addEventListener("waiting", () => setStatus("Буферизация…"));
+    // Эквалайзер следует за реальным воспроизведением, даже если событие playing было пропущено
+    radio.addEventListener("timeupdate", () => {
+      if (!radio.paused && !isPlaying) {
+        clearTimeout(stallTimer);
+        setPlayingUI(true);
+      }
+    });
     radio.addEventListener("error", () => {
       if (!radio.getAttribute("src")) return;
       streamFailed();
