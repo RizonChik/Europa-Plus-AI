@@ -210,6 +210,8 @@
       info: "Основной эфир · MP3 256 kbps",
       abbr: "E+",
       hue: 335,
+      homepage: "https://europaplus.ru",
+      favicon: "https://europaplus.ru/favicon.ico",
       streams: [
         "https://ep256.hostingradio.ru:8052/europaplus256.mp3",
         "https://epdop.hostingradio.ru:8033/europaplus32.aacp"
@@ -260,27 +262,50 @@
     }
 
     // Логотип станции: картинка из каталога, при ошибке остаются инициалы
-    function appendLogo(el, s) {
-      el.textContent = s.abbr || initials(s.name);
-      if (!s.favicon) return;
-      const img = new Image();
-      img.alt = "";
-      img.loading = "lazy";
-      img.referrerPolicy = "no-referrer";
-      img.onload = () => { el.textContent = ""; el.append(img); };
-      img.src = s.favicon;
+    // Варианты логотипа по порядку: значок каталога, favicon сайта станции, сервис иконок по домену
+    function logoCandidates(s) {
+      const list = [];
+      if (s.favicon) list.push(s.favicon);
+      if (s.homepage) {
+        try {
+          const host = new URL(s.homepage).hostname;
+          list.push(`https://www.google.com/s2/favicons?domain=${host}&sz=128`);
+        } catch { /* некорректный адрес — пропускаем */ }
+      }
+      return list;
     }
 
+    // Пробует картинки по очереди; onOk получает загруженный <img>, onFail вызывается, если ни одна не подошла
+    function tryLogo(urls, i, onOk, onFail) {
+      if (i >= urls.length) { onFail(); return; }
+      const img = new Image();
+      img.alt = "";
+      img.referrerPolicy = "no-referrer";
+      img.onload = () => onOk(img);
+      img.onerror = () => tryLogo(urls, i + 1, onOk, onFail);
+      img.src = urls[i];
+    }
+
+    function appendLogo(el, s) {
+      el.textContent = s.abbr || initials(s.name);
+      const urls = logoCandidates(s);
+      if (!urls.length) return;
+      tryLogo(urls, 0, (img) => { el.textContent = ""; el.append(img); }, () => {});
+    }
+
+    let coverToken = 0;
     function setCoverLogo(s) {
-      const img = $("coverImg");
-      img.hidden = true;
-      img.onload = null;
-      img.onerror = null;
-      img.removeAttribute("src");
-      if (!s.favicon) return;
-      img.onload = () => { img.hidden = false; };
-      img.onerror = () => { img.hidden = true; };
-      img.src = s.favicon;
+      const token = ++coverToken;
+      const cover = $("coverImg");
+      cover.hidden = true;
+      cover.removeAttribute("src");
+      const urls = logoCandidates(s);
+      if (!urls.length) return;
+      tryLogo(urls, 0, (img) => {
+        if (token !== coverToken) return;
+        cover.src = img.src;
+        cover.hidden = false;
+      }, () => {});
     }
 
     function applyTheme(station) {
@@ -484,6 +509,7 @@
                 abbr: initials(name),
                 hue,
                 favicon: s.favicon && s.favicon.startsWith("https://") ? s.favicon : "",
+                homepage: s.homepage && s.homepage.startsWith("https://") ? s.homepage : "",
                 streams: [s.url_resolved]
               };
             });
